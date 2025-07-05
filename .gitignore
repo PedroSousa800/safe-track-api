@@ -1,0 +1,22 @@
+# Virtual environment
+venv/
+env/
+
+# Byte-code files
+*.pyc
+__pycache__/
+
+# Editor/IDE specific files
+.vscode/ # If you don't want to share VS Code settings
+.idea/   # For PyCharm/IntelliJ
+
+# OS specific files
+.DS_Store # macOS
+Thumbs.db # Windows
+
+# Railway/Deployment specific files (if you don't want them in source control)
+.railway/
+
+*.env
+.env
+
