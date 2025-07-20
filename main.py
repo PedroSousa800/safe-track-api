@@ -46,12 +46,12 @@ async def get_db_connection():
 # --- Modelos Pydantic para validação de entrada ---
 
 class UserRegister(BaseModel):
+    username: str
     email: EmailStr
-    password: str # Será usado apenas para o registro inicial no backend, hashado e descartado
-    # FastAPI pode validar o tamanho da senha aqui se necessário, mas o DB também fará o hash.
+    password: str 
 
 class UserFinalizePin(BaseModel):
-    user_id: str # Para simplicidade, string, mas pode ser UUID
+    user_id: str 
     pin: str
 
 class UserLogin(BaseModel):
@@ -72,7 +72,7 @@ async def register_user(user_data: UserRegister, db: asyncpg.Connection = Depend
         # asyncpg.fetchval retorna o valor da primeira coluna.
         # Se a função do DB retorna JSONB, asyncpg deveria converter para dict Python.
         # Mas se estiver vindo como string, vamos parsear:
-        raw_result = await db.fetchval( # Renomeado para 'raw_result' para clareza
+        raw_result = await db.fetchval(
             "SELECT api.register_user_api($1::jsonb)",
             user_data.model_dump_json() # Converte o modelo Pydantic para JSON string
         )
@@ -90,23 +90,31 @@ async def register_user(user_data: UserRegister, db: asyncpg.Connection = Depend
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     
 # Endpoint para Finalizar Registro com PIN
-@app.post("/finalize-pin")
-async def finalize_pin(pin_data: UserFinalizePin, db: asyncpg.Connection = Depends(get_db_connection)):
+@app.post("/finalize-pin/{user_id}") # ALTERADO AQUI: adicionado /{user_id}
+async def finalize_pin(user_id: str, pin_data: UserFinalizePin, db: asyncpg.Connection = Depends(get_db_connection)):
+    # Certifique-se de que o user_id recebido no path corresponda ao do payload, se necessário
+    if str(pin_data.user_id) != user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User ID mismatch in path and body.")
+
     try:
         raw_result = await db.fetchval (
             "SELECT api.finalize_registration_with_pin_api($1::jsonb)",
-            pin_data.model_dump_json()
+            pin_data.model_dump_json() # Use o pin_data.model_dump_json() para o payload
         )
         # Tentar parsear o resultado se não for um dicionário (já que o erro sugere que é uma string)
         if isinstance(raw_result, str):
             result_dict = json.loads(raw_result)
         else:
             result_dict = raw_result # Já é um dicionário ou similar
-        return {"message": result_dict['message'], "user_id": result_dict['user_id']}
+
+        # Verifique se 'message' e 'user_id' existem em result_dict antes de acessá-los
+        message = result_dict.get('message', 'PIN finalizado com sucesso (sem mensagem específica).')
+        returned_user_id = result_dict.get('user_id', user_id) # Usa o user_id do path como fallback
+
+        return {"message": message, "user_id": returned_user_id}
     
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-
 # Endpoint de Login
 @app.post("/login")
 async def login_user(credentials: UserLogin, db: asyncpg.Connection = Depends(get_db_connection)):
