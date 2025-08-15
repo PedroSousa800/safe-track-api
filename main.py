@@ -1,6 +1,6 @@
 # main.py
 
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, BackgroundTasks
 from pydantic import BaseModel, EmailStr, Field
 import asyncpg
 import os
@@ -10,9 +10,24 @@ from uuid import UUID
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+# Importe os modelos que você definiu para os endpoints
+from models import UserEmail, UserRegister, UserFinalizePin, UserProfileUpdate, VerifyRecoveryTokenRequest
+import random
+import string
+import logging
+import secrets
+# CORREÇÃO: Importar a biblioteca bcrypt
+from passlib.context import CryptContext
+
+# Defina a validade do token (ex: 15 minutos)
+TOKEN_EXPIRATION_MINUTES = 15
 
 # Carrega as variáveis de ambiente do arquivo .env
 load_dotenv()
+
+# Configuração do logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -25,20 +40,27 @@ DATABASE_URL = (
 # Pool de conexões
 db_pool = None
 
+# Contexto de hash para senhas
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Função para criar o hash da senha
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
 @app.on_event("startup")
 async def startup():
     global db_pool
     try:
         db_pool = await asyncpg.create_pool(DATABASE_URL)
-        print("Conexão com o banco de dados estabelecida com sucesso!")
+        logger.info("Conexão com o banco de dados estabelecida com sucesso!")
     except Exception as e:
-        print(f"Falha ao conectar ao banco de dados: {e}")
+        logger.error(f"Falha ao conectar ao banco de dados: {e}")
 
 @app.on_event("shutdown")
 async def shutdown():
     if db_pool:
         await db_pool.close()
-        print("Conexão com o banco de dados encerrada.")
+        logger.info("Conexão com o banco de dados encerrada.")
 
 # Dependência para obter uma conexão do pool
 async def get_db_connection():
@@ -46,20 +68,6 @@ async def get_db_connection():
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database pool not initialized.")
     async with db_pool.acquire() as connection:
         yield connection
-
-# --- Modelos Pydantic para validação de entrada ---
-
-class UserRegister(BaseModel):
-    email: EmailStr
-    password: str
-    username: str
-
-class UserFinalizePin(BaseModel):
-    user_id: str # Mantido como str para corresponder ao que vem do frontend
-    pin: str
-
-class UserProfileUpdate(BaseModel):
-    profile_type: str = Field(..., example="tutor", pattern="^(tutor|monitorado)$") # Garante validação no FastAPI
 
 # --- JWT: Configurações de JWT ---
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
@@ -109,9 +117,18 @@ async def read_root():
 @app.post("/register", status_code=status.HTTP_200_OK)
 async def register_user(user_data: UserRegister, db: asyncpg.Connection = Depends(get_db_connection)):
     try:
+        # CORREÇÃO: Hash da senha antes de enviar para o banco de dados
+        hashed_password = get_password_hash(user_data.password)
+        # CORREÇÃO: Atualizar o dicionário com o hash da senha
+        payload = {
+            "email": user_data.email,
+            "name": user_data.name,
+            "password_hash": hashed_password # Usar o hash da senha
+        }
+        
         raw_result = await db.fetchval(
             "SELECT api.register_user_api($1::jsonb)",
-            user_data.model_dump_json()
+            json.dumps(payload) # Enviar o payload com o hash
         )
 
         if isinstance(raw_result, str):
@@ -235,7 +252,7 @@ async def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: async
         raise
     except Exception as e:
         # Registre o erro para depuração
-        print(f"Erro inesperado no login: {e}") 
+        logger.error(f"Erro inesperado no login: {e}") 
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
 
 # Endpoint para atualizar o tipo de perfil do usuário (CORRIGIDO: PATCH e URL)
@@ -277,3 +294,89 @@ async def update_user_profile(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"message": "Database error during profile update.", "error": str(e)})
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"message": "An unexpected error occurred.", "error": str(e)})
+
+
+# ----------------- Funcionalidade de Recuperação de PIN -----------------
+# Placeholder para a função de envio de e-mail.
+async def send_pin_recovery_email(email: str, token: str):
+    """
+    Função assíncrona para simular o envio de e-mail de recuperação de PIN.
+    """
+    logger.info(f"--- SIMULANDO ENVIO DE E-MAIL ---")
+    logger.info(f"Para: {email}")
+    logger.info(f"Assunto: Código de Recuperação de PIN SafeTrack")
+    logger.info(f"Mensagem: Seu código de recuperação de PIN é: {token}")
+    logger.info(f"--- FIM DA SIMULAÇÃO ---")
+
+@app.post("/auth/recover-pin", status_code=status.HTTP_200_OK)
+async def recover_pin(user_email: UserEmail, background_tasks: BackgroundTasks, db: asyncpg.Connection = Depends(get_db_connection)):
+    """
+    Endpoint para iniciar o processo de recuperação de PIN.
+    - Chama a função do schema `api` para orquestrar o processo.
+    - Em caso de sucesso, envia um e-mail com o código em uma tarefa em background.
+    - CORRIGIDO: Sempre retorna um status 200 para evitar enumeração de usuários.
+    """
+    try:
+        # Chama a função do schema API, que encapsula toda a lógica do DB
+        raw_result = await db.fetchval(
+            "SELECT api.start_pin_recovery_process_api_func($1)",
+            user_email.email
+        )
+        
+        # O backend não retorna um erro se o email não for encontrado por segurança.
+        # Ele apenas não envia o email.
+        # Por isso, sempre retornamos um status 200.
+        if raw_result is not None:
+            response_data = json.loads(raw_result)
+            if response_data.get("status") == "recovery_started":
+                token = response_data.get("token")
+                if token:
+                    # Enviar o e-mail em uma tarefa em background
+                    background_tasks.add_task(send_pin_recovery_email, user_email.email, token)
+            # Se a resposta do DB for inválida, logamos mas ainda retornamos um sucesso genérico
+            else:
+                logger.error(f"Erro inesperado do DB no fluxo de recuperação de PIN: {response_data}")
+
+    except Exception as e:
+        logger.error(f"Unexpected error in PIN recovery flow: {e}")
+        
+    # Sempre retorna um sucesso genérico para o frontend, conforme a lógica de segurança.
+    return {"message": "If an account with that email exists, a recovery code has been sent."}
+
+
+@app.post("/auth/verify-recovery-token")
+async def verify_recovery_token(request: VerifyRecoveryTokenRequest, db: asyncpg.Connection = Depends(get_db_connection)):
+    """
+    Verifica se o token de recuperação fornecido é válido e ainda não expirou.
+    """
+    try:
+        raw_result = await db.fetchval(
+            "SELECT api.verify_recovery_token_api_func($1, $2)",
+            request.email,
+            request.token
+        )
+        
+        if raw_result is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"message": "Token inválido ou expirado."}
+            )
+
+        response_data = json.loads(raw_result)
+
+        if response_data.get("status") == "success":
+            return {"message": "Token verificado com sucesso.", "user_id": response_data.get("user_id")}
+        else:
+            # Em caso de falha, retorne uma mensagem genérica por segurança
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"message": response_data.get("message", "Token inválido ou expirado.")}
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro na verificação de token: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "An unexpected error occurred."}
+        )
