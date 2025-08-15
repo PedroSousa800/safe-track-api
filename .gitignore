@@ -20,3 +20,5 @@ Thumbs.db # Windows
 *.env
 .env
 
+launch.json
+

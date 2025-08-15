@@ -16,7 +16,7 @@ import random
 import string
 import logging
 import secrets
-# CORREÇÃO: Importar a biblioteca bcrypt
+# Importar a biblioteca bcrypt
 from passlib.context import CryptContext
 
 # Defina a validade do token (ex: 15 minutos)
@@ -117,9 +117,9 @@ async def read_root():
 @app.post("/register", status_code=status.HTTP_200_OK)
 async def register_user(user_data: UserRegister, db: asyncpg.Connection = Depends(get_db_connection)):
     try:
-        # CORREÇÃO: Hash da senha antes de enviar para o banco de dados
+        # Hash da senha antes de enviar para o banco de dados
         hashed_password = get_password_hash(user_data.password)
-        # CORREÇÃO: Atualizar o dicionário com o hash da senha
+        # Atualizar o dicionário com o hash da senha
         payload = {
             "email": user_data.email,
             "name": user_data.name,
@@ -197,7 +197,7 @@ async def finalize_pin(pin_data: UserFinalizePin, db: asyncpg.Connection = Depen
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "message": result_dict.get('message', 'Falha ao finalizar PIN.'),
-                    "user_id": pin_data.user_id,
+                    "user_id": str(pin_data.user_id), # <-- CORRIGIDO AQUI: Converte UUID para string
                     "status": result_dict.get('status', 'error')
                 }
             )
@@ -339,7 +339,6 @@ async def recover_pin(user_email: UserEmail, background_tasks: BackgroundTasks, 
 
     except Exception as e:
         logger.error(f"Unexpected error in PIN recovery flow: {e}")
-        
     # Sempre retorna um sucesso genérico para o frontend, conforme a lógica de segurança.
     return {"message": "If an account with that email exists, a recovery code has been sent."}
 

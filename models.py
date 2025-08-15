@@ -15,7 +15,9 @@ class UserFinalizePin(BaseModel):
     pin: str = Field(..., min_length=4, max_length=4)
 
 class UserProfileUpdate(BaseModel):
-    profile_type: str = Field(..., example="tutor", pattern="^(tutor|monitorado)$")
+    # O Pydantic irá agora validar se o valor é uma única letra
+    # 'T' para 'tutor' ou 'M' para 'monitorado'
+    profile_type: str = Field(..., pattern="^[T]$")
 
 # Modelo Pydantic para o corpo da requisição de verificação de token
 class VerifyRecoveryTokenRequest(BaseModel):
