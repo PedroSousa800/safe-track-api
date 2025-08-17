@@ -1,7 +1,7 @@
 # main.py
 
 from fastapi import FastAPI, HTTPException, Depends, status, BackgroundTasks
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, UUID4
 import asyncpg
 import os
 from dotenv import load_dotenv
@@ -10,22 +10,15 @@ from uuid import UUID
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-# Importe os modelos que você definiu para os endpoints
-from models import UserEmail, UserRegister, UserFinalizePin, UserProfileUpdate, VerifyRecoveryTokenRequest
-import random
-import string
 import logging
 import secrets
-# Importar a biblioteca bcrypt
 from passlib.context import CryptContext
-
-# Defina a validade do token (ex: 15 minutos)
-TOKEN_EXPIRATION_MINUTES = 15
+from typing import Optional
 
 # Carrega as variáveis de ambiente do arquivo .env
 load_dotenv()
 
-# Configuração do logger
+# --- Configuração de Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -106,6 +99,36 @@ async def get_current_user_id(token: str = Depends(oauth2_scheme)):
         return user_id # Retorna o user_id como string
     except JWTError:
         raise credentials_exception
+
+# --- Modelos Pydantic para os Endpoints ---
+# (Definindo aqui para garantir que o código seja auto-contido)
+class UserEmail(BaseModel):
+    email: EmailStr = Field(..., title="Email do Usuário", description="Endereço de e-mail do usuário para login ou recuperação.")
+
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=6, max_length=128)
+    name: str = Field(min_length=3, max_length=50)
+
+class UserFinalizePin(BaseModel):
+    user_id: UUID
+    pin: str = Field(min_length=4, max_length=4)
+
+class UserProfileUpdate(BaseModel):
+    profile_type: str = Field(..., description="O novo tipo de perfil para o usuário (e.g., 'driver' ou 'guardian')")
+
+class VerifyRecoveryTokenRequest(BaseModel):
+    email: EmailStr
+    token: str
+
+class LocationUpdate(BaseModel):
+    latitude: float
+    longitude: float
+    accuracy: float
+    timestamp: Optional[datetime] = Field(default_factory=datetime.utcnow)
+
+class LocationIntervalUpdate(BaseModel):
+    location_interval_minutes: int = Field(..., gt=0, description="O novo intervalo de tempo em minutos para a atualização de localização.")
 
 # --- Endpoints da API ---
 
@@ -197,7 +220,7 @@ async def finalize_pin(pin_data: UserFinalizePin, db: asyncpg.Connection = Depen
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "message": result_dict.get('message', 'Falha ao finalizar PIN.'),
-                    "user_id": str(pin_data.user_id), # <-- CORRIGIDO AQUI: Converte UUID para string
+                    "user_id": pin_data.user_id,
                     "status": result_dict.get('status', 'error')
                 }
             )
@@ -217,6 +240,7 @@ async def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: async
             "SELECT api.login_user_api($1::jsonb)",
             login_credentials_json
         )
+        
         if isinstance(raw_result, str):
             result_dict = json.loads(raw_result)
         else:
@@ -234,7 +258,7 @@ async def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: async
             return {
                 "message": result_dict['message'],
                 "user_id": user_id_from_db,
-                "profile_type": result_dict.get('profile_type'), # Adicionado profile_type
+                "profile_type": result_dict.get('profile_type_code'), # Corrigido para a chave correta
                 "status": result_dict['status'],
                 "access_token": access_token,
                 "token_type": "bearer"
@@ -256,12 +280,12 @@ async def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: async
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
 
 # Endpoint para atualizar o tipo de perfil do usuário (CORRIGIDO: PATCH e URL)
-@app.patch("/users/{user_id}/profile_type", status_code=status.HTTP_200_OK) # <-- ALTERADO AQUI
+@app.patch("/users/{user_id}/profile_type", status_code=status.HTTP_200_OK)
 async def update_user_profile(
-    user_id: UUID, # FastAPI converte automaticamente de string da URL para UUID
+    user_id: UUID,
     profile_data: UserProfileUpdate,
     db: asyncpg.Connection = Depends(get_db_connection),
-    current_user_id: str = Depends(get_current_user_id) # Retorna user_id como str do JWT
+    current_user_id: str = Depends(get_current_user_id)
 ):
     # Converte current_user_id para UUID para comparação consistente
     if user_id != UUID(current_user_id):
@@ -312,9 +336,6 @@ async def send_pin_recovery_email(email: str, token: str):
 async def recover_pin(user_email: UserEmail, background_tasks: BackgroundTasks, db: asyncpg.Connection = Depends(get_db_connection)):
     """
     Endpoint para iniciar o processo de recuperação de PIN.
-    - Chama a função do schema `api` para orquestrar o processo.
-    - Em caso de sucesso, envia um e-mail com o código em uma tarefa em background.
-    - CORRIGIDO: Sempre retorna um status 200 para evitar enumeração de usuários.
     """
     try:
         # Chama a função do schema API, que encapsula toda a lógica do DB
@@ -323,17 +344,12 @@ async def recover_pin(user_email: UserEmail, background_tasks: BackgroundTasks, 
             user_email.email
         )
         
-        # O backend não retorna um erro se o email não for encontrado por segurança.
-        # Ele apenas não envia o email.
-        # Por isso, sempre retornamos um status 200.
         if raw_result is not None:
             response_data = json.loads(raw_result)
             if response_data.get("status") == "recovery_started":
                 token = response_data.get("token")
                 if token:
-                    # Enviar o e-mail em uma tarefa em background
                     background_tasks.add_task(send_pin_recovery_email, user_email.email, token)
-            # Se a resposta do DB for inválida, logamos mas ainda retornamos um sucesso genérico
             else:
                 logger.error(f"Erro inesperado do DB no fluxo de recuperação de PIN: {response_data}")
 
@@ -366,7 +382,6 @@ async def verify_recovery_token(request: VerifyRecoveryTokenRequest, db: asyncpg
         if response_data.get("status") == "success":
             return {"message": "Token verificado com sucesso.", "user_id": response_data.get("user_id")}
         else:
-            # Em caso de falha, retorne uma mensagem genérica por segurança
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"message": response_data.get("message", "Token inválido ou expirado.")}
@@ -379,3 +394,85 @@ async def verify_recovery_token(request: VerifyRecoveryTokenRequest, db: asyncpg
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"message": "An unexpected error occurred."}
         )
+
+# ----------------- Funcionalidade de Localização -----------------
+@app.post("/location", status_code=status.HTTP_201_CREATED)
+async def create_location(
+    location_data: LocationUpdate,
+    db: asyncpg.Connection = Depends(get_db_connection),
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """
+    Registra a localização atual do usuário.
+    """
+    try:
+        # Chama a função do schema `api` para registrar a localização
+        raw_result = await db.fetchval(
+            "SELECT api.insert_user_location($1::jsonb)",
+            json.dumps({
+                "user_id": current_user_id,
+                "latitude": location_data.latitude,
+                "longitude": location_data.longitude,
+                "accuracy": location_data.accuracy,
+                "timestamp": location_data.timestamp.isoformat()
+            })
+        )
+        
+        if raw_result:
+            response_data = json.loads(raw_result)
+            if response_data.get("status") == "success":
+                return {"message": "Localização registrada com sucesso!", "status": "success"}
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to insert location due to an unexpected database response."
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro ao registrar localização: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "An unexpected error occurred.", "error": str(e)}
+        )
+
+# Endpoint para alterar o intervalo de atualização de localização
+@app.patch("/users/{user_id}/location-interval", status_code=status.HTTP_200_OK)
+async def update_location_interval(
+    user_id: UUID,
+    interval_data: LocationIntervalUpdate,
+    db: asyncpg.Connection = Depends(get_db_connection),
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """
+    Atualiza o intervalo de tempo em minutos para a atualização de localização de um usuário.
+    """
+    if user_id != UUID(current_user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: You can only update your own location interval.")
+    
+    try:
+        raw_result = await db.fetchval(
+            "SELECT api.update_user_location_interval($1::uuid, $2::integer)",
+            user_id,
+            interval_data.location_interval_minutes
+        )
+        
+        if isinstance(raw_result, str):
+            response_data = json.loads(raw_result)
+        else:
+            response_data = raw_result
+
+        if response_data.get("status") == "success":
+            return {"message": "Intervalo de localização atualizado com sucesso!", "status": "success"}
+        elif response_data.get("status") == "user_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=response_data)
+        else:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=response_data)
+
+    except HTTPException:
+        raise
+    except asyncpg.exceptions.PostgresError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"message": "Database error during location interval update.", "error": str(e)})
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"message": "An unexpected error occurred.", "error": str(e)})

@@ -1,4 +1,5 @@
 # models.py
+
 from pydantic import BaseModel, EmailStr, Field
 from uuid import UUID
 
@@ -23,3 +24,18 @@ class UserProfileUpdate(BaseModel):
 class VerifyRecoveryTokenRequest(BaseModel):
     email: str
     token: str
+
+# --- Novos modelos para Localização e Intervalo ---
+
+class LocationData(BaseModel):
+    """
+    Modelo Pydantic para validar os dados de localização enviados.
+    """
+    latitude: float = Field(..., ge=-90, le=90)
+    longitude: float = Field(..., ge=-180, le=180)
+
+class LocationInterval(BaseModel):
+    """
+    Modelo Pydantic para validar o intervalo de coleta de localização.
+    """
+    interval_in_seconds: int = Field(..., gt=0)
