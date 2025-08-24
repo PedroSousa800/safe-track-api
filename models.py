@@ -1,41 +1,35 @@
 # models.py
-
 from pydantic import BaseModel, EmailStr, Field
+from datetime import datetime
+from typing import Optional
 from uuid import UUID
 
+# --- Modelos Pydantic para os Endpoints ---
+
 class UserEmail(BaseModel):
-    email: EmailStr
+    email: EmailStr = Field(..., title="Email do Usuário", description="Endereço de e-mail do usuário para login ou recuperação.")
 
 class UserRegister(BaseModel):
     email: EmailStr
-    password: str 
-    name: str
+    password: str = Field(min_length=6, max_length=128)
+    name: str = Field(min_length=3, max_length=50)
 
 class UserFinalizePin(BaseModel):
     user_id: UUID
-    pin: str = Field(..., min_length=4, max_length=4)
+    pin: str = Field(min_length=4, max_length=4)
 
 class UserProfileUpdate(BaseModel):
-    # O Pydantic irá agora validar se o valor é uma única letra
-    # 'T' para 'tutor' ou 'M' para 'monitorado'
-    profile_type: str = Field(..., pattern="^[T]$")
+    profile_type: str = Field(..., description="O novo tipo de perfil para o usuário (e.g., 'driver' ou 'guardian')")
 
-# Modelo Pydantic para o corpo da requisição de verificação de token
 class VerifyRecoveryTokenRequest(BaseModel):
-    email: str
+    email: EmailStr
     token: str
 
-# --- Novos modelos para Localização e Intervalo ---
+class LocationUpdate(BaseModel):
+    latitude: float
+    longitude: float
+    accuracy: float
+    timestamp: Optional[datetime] = Field(default_factory=datetime.utcnow)
 
-class LocationData(BaseModel):
-    """
-    Modelo Pydantic para validar os dados de localização enviados.
-    """
-    latitude: float = Field(..., ge=-90, le=90)
-    longitude: float = Field(..., ge=-180, le=180)
-
-class LocationInterval(BaseModel):
-    """
-    Modelo Pydantic para validar o intervalo de coleta de localização.
-    """
-    interval_in_seconds: int = Field(..., gt=0)
+class LocationIntervalUpdate(BaseModel):
+    interval_in_seconds: int = Field(..., gt=0, description="O novo intervalo de tempo em segundos para a atualização de localização.")

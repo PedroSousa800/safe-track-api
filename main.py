@@ -1,7 +1,6 @@
 # main.py
 
 from fastapi import FastAPI, HTTPException, Depends, status, BackgroundTasks
-from pydantic import BaseModel, EmailStr, Field, UUID4
 import asyncpg
 import os
 from dotenv import load_dotenv
@@ -14,6 +13,17 @@ import logging
 import secrets
 from passlib.context import CryptContext
 from typing import Optional
+
+# Importar os modelos Pydantic do novo arquivo models.py
+from models import (
+    UserEmail,
+    UserRegister,
+    UserFinalizePin,
+    UserProfileUpdate,
+    VerifyRecoveryTokenRequest,
+    LocationUpdate,
+    LocationIntervalUpdate,
+)
 
 # Carrega as variáveis de ambiente do arquivo .env
 load_dotenv()
@@ -99,36 +109,6 @@ async def get_current_user_id(token: str = Depends(oauth2_scheme)):
         return user_id # Retorna o user_id como string
     except JWTError:
         raise credentials_exception
-
-# --- Modelos Pydantic para os Endpoints ---
-# (Definindo aqui para garantir que o código seja auto-contido)
-class UserEmail(BaseModel):
-    email: EmailStr = Field(..., title="Email do Usuário", description="Endereço de e-mail do usuário para login ou recuperação.")
-
-class UserRegister(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=6, max_length=128)
-    name: str = Field(min_length=3, max_length=50)
-
-class UserFinalizePin(BaseModel):
-    user_id: UUID
-    pin: str = Field(min_length=4, max_length=4)
-
-class UserProfileUpdate(BaseModel):
-    profile_type: str = Field(..., description="O novo tipo de perfil para o usuário (e.g., 'driver' ou 'guardian')")
-
-class VerifyRecoveryTokenRequest(BaseModel):
-    email: EmailStr
-    token: str
-
-class LocationUpdate(BaseModel):
-    latitude: float
-    longitude: float
-    accuracy: float
-    timestamp: Optional[datetime] = Field(default_factory=datetime.utcnow)
-
-class LocationIntervalUpdate(BaseModel):
-    location_interval_minutes: int = Field(..., gt=0, description="O novo intervalo de tempo em minutos para a atualização de localização.")
 
 # --- Endpoints da API ---
 
@@ -437,6 +417,45 @@ async def create_location(
             detail={"message": "An unexpected error occurred.", "error": str(e)}
         )
 
+# ROTA RECUPERADA: Endpoint para buscar o intervalo de localização
+@app.get("/users/{user_id}/location-interval", status_code=status.HTTP_200_OK)
+async def get_location_interval(
+    user_id: UUID,
+    db: asyncpg.Connection = Depends(get_db_connection),
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """
+    Busca o intervalo de tempo em segundos para a atualização de localização de um usuário.
+    """
+    if user_id != UUID(current_user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: You can only retrieve your own location interval.")
+
+    try:
+        raw_result = await db.fetchval(
+            "SELECT api.get_location_interval($1::uuid)",
+            user_id
+        )
+        
+        if isinstance(raw_result, str):
+            response_data = json.loads(raw_result)
+        else:
+            response_data = raw_result
+
+        if response_data.get("status") == "success":
+            return {"interval_in_seconds": response_data.get("interval_in_seconds"), "status": "success"}
+        elif response_data.get("status") == "user_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=response_data)
+        else:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=response_data)
+
+    except HTTPException:
+        raise
+    except asyncpg.exceptions.PostgresError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"message": "Database error during location interval retrieval.", "error": str(e)})
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"message": "An unexpected error occurred.", "error": str(e)})
+
+
 # Endpoint para alterar o intervalo de atualização de localização
 @app.patch("/users/{user_id}/location-interval", status_code=status.HTTP_200_OK)
 async def update_location_interval(
@@ -446,16 +465,16 @@ async def update_location_interval(
     current_user_id: str = Depends(get_current_user_id)
 ):
     """
-    Atualiza o intervalo de tempo em minutos para a atualização de localização de um usuário.
+    Atualiza o intervalo de tempo em segundos para a atualização de localização de um usuário.
     """
     if user_id != UUID(current_user_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: You can only update your own location interval.")
     
     try:
         raw_result = await db.fetchval(
-            "SELECT api.update_user_location_interval($1::uuid, $2::integer)",
+            "SELECT api.set_location_interval($1::uuid, $2::integer)",
             user_id,
-            interval_data.location_interval_minutes
+            interval_data.interval_in_seconds
         )
         
         if isinstance(raw_result, str):
