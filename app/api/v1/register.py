@@ -17,7 +17,7 @@ router = APIRouter(
     tags=["Register"],
 )
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 async def register_user(
     user_data: UserCreate,  # Recebe o modelo Pydantic no corpo da requisição, que inclui 'name'.
     db: asyncpg.Connection = Depends(get_db_connection)
@@ -43,11 +43,11 @@ async def register_user(
         if raw_result:
             response_data = json.loads(raw_result)
             if response_data.get("status") == "new_user_registered":
-                return {"message": "Usuário registrado com sucesso! Por favor, finalize o registro com o seu PIN.", "status": "success"}
-        
+                return {"message": "Usuário registrado com sucesso! Por favor, finalize o registro com o seu PIN.", "status": "new_user_registered", "user_id": response_data.get("user_id")}
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to register user due to an unexpected database response."
+            detail=response_data.get("message")
         )
 
     except HTTPException:
