@@ -42,19 +42,23 @@ class UserFinalizePin(BaseModel):
 
 class LocationUpdate(BaseModel):
     """
-    Schema para a atualização de dados de localização.
+    Schema para o registo de dados de localização.
+    
+    O campo 'timestamp' é OBRIGATÓRIO e deve ser fornecido
+    pelo cliente com o offset de fuso horário (e.g., ISO 8601 com +01:00)
+    para garantir que a API possa calcular corretamente o UTC e o fuso horário local.
     """
-    latitude: float
-    longitude: float
-    accuracy: float
-    timestamp: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    latitude: float = Field(..., description="Latitude do dispositivo.")
+    longitude: float = Field(..., description="Longitude do dispositivo.")
+    # Removido o default_factory e Optional para forçar o cliente a enviar um timestamp aware.
+    timestamp: datetime = Field(..., description="Timestamp de coleta da localização, deve incluir o fuso horário (e.g., 2025-10-06T10:30:00+01:00).")
 
 class LocationIntervalUpdate(BaseModel):
     """
-    Schema para a atualização do intervalo de localização.
+    Schema para atualizar o intervalo de atualização de localização de um usuário.
     """
-    latitude: float
-    longitude: float
+    interval_in_seconds: int = Field(..., ge=10, description="Intervalo de atualização em segundos (mínimo de 10 segundos).")
+
 
 class UserProfileUpdate(BaseModel):
     profile_type: str = Field(..., description="Type of user. For example: 'T' or 'M'")

@@ -1,0 +1,75 @@
+services:
+  # 1. Serviço do Servidor FastAPI
+  api:
+    # Usa o Dockerfile no diretório atual para construir a imagem
+    build: .
+    # Mapeia a porta 8000 do contentor para a porta 8000 da sua máquina local
+    ports:
+      - "8000:8000"
+    # Opcional: Descomente esta secção para desenvolvimento local (hot-reload)
+    volumes:
+      - .:/app
+    # Reinicia se falhar, exceto se for explicitamente interrompido
+    restart: always
+    # Adiciona Healthcheck para garantir que a aplicação está pronta (não apenas o contentor)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"] # Ajuste o endpoint se o seu não for /health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # Variáveis de Ambiente
+    environment:
+      # A API deve ligar-se ao REDIS pelo nome do SERVIÇO (redis)
+      REDIS_URL: "redis://redis:6379/0" # Usa o nome do serviço 'redis'
+      # Configurações do DB (Devem coincidir com as suas variáveis reais)
+      DB_HOST: ${DB_HOST}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      DB_PORT: ${DB_PORT} 
+      # JWT/Outras variáveis necessárias para o Pydantic:
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: ${JWT_ALGORITHM}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
+      DB_POOL_MIN_SIZE: ${DB_POOL_MIN_SIZE}
+      DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE}
+      DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      LOG_LEVEL: ${LOG_LEVEL}
+      LOCATION_RATE_LIMIT_TIMES: ${LOCATION_RATE_LIMIT_TIMES}
+      LOCATION_RATE_LIMIT_SECONDS: ${LOCATION_RATE_LIMIT_SECONDS}
+    # Garante que os serviços de infraestrutura estão prontos antes de iniciar a API
+    depends_on:
+      - postgres
+      - redis
+
+  # 2. Serviço da Base de Dados PostgreSQL
+  postgres:
+    image: postgres:15-alpine # Uma imagem leve e moderna do PostgreSQL
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER} # Usa variáveis do seu .env
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      # Armazena os dados permanentemente fora do contentor
+      - postgres_data:/var/lib/postgresql/data/
+    # Opcional: Descomente para aceder à DB a partir da máquina local (ex: com pgAdmin)
+    ports: 
+      - ${DB_PORT}
+
+  # 3. Serviço do Redis (Para Rate Limiting e Caching)
+  redis:
+    image: redis:7-alpine # Uma imagem leve e moderna do Redis
+    restart: always
+    volumes:
+      # Armazena dados do Redis (apenas necessário se for usar Redis como cache persistente)
+      - redis_data:/data/
+    # Opcional: Descomente para aceder ao Redis a partir da máquina local
+    ports:
+      - "6379:6379"
+
+# Volumes para persistência de dados
+volumes:
+  postgres_data:
+  redis_data:

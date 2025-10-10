@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     DB_POOL_MAX_SIZE: int 
     DB_POOL_TIMEOUT_SECONDS: int 
 
+    # --- Configurações de REDIS ---
+    REDIS_URL: str
+
+    # --- Configurações de RATE LIMITING
+    LOCATION_RATE_LIMIT_TIMES: int
+    LOCATION_RATE_LIMIT_SECONDS: int
+
     LOG_LEVEL: str
 
     class Config:
